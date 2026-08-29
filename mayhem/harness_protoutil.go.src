@@ -1,0 +1,67 @@
+// mayhem/harness_protoutil.go.src — native testing.F harness for Hyperledger
+// Fabric's protobuf block/transaction decoders (the byte-eating surface in
+// `protoutil`: the Unmarshal* family + the block/envelope channel-ID extraction
+// chain). Staged by mayhem/build.sh into a fresh single-package dir under a
+// leading-underscore path (_mayhem_harness/protoutilfuzz) — skipped by
+// `go build/test ./...` wildcards (so the upstream suite is never disturbed) yet
+// still loadable by the explicit path go-118-fuzz-build is given. This also dodges
+// the internal/external *_test.go package-loader trap that breaks go-118-fuzz-build
+// on protoutil's own directory (which mixes `protoutil` and `protoutil_test`).
+//
+// WHY import the real package instead of copying source (oxia pattern, netnew §6
+// Go): every entry point here is EXPORTED, so the harness lives in its own package
+// and imports github.com/hyperledger/fabric/protoutil directly — no source copy is
+// needed, and the fuzzed code is the genuine upstream decoder path.
+//
+// Byte-in, NO file I/O (netnew §3): the fuzzer's bytes are fed straight into the
+// proto decoders. GetChannelIDFromBlockBytes walks the full realistic parse chain
+// Block -> BlockData -> Envelope -> Payload -> Header -> ChannelHeader. Starter
+// seeds are Mayhem's job via the Mayhemfile testsuite: directive.
+package protoutilfuzz
+
+import (
+	"testing"
+
+	"github.com/hyperledger/fabric/protoutil"
+)
+
+// FuzzProtoutil drives Fabric's byte-in proto decoders over arbitrary bytes. Each
+// decoder is total (returns an error rather than panicking on bad input); the
+// harness asserts nothing — a panic/OOB/hang inside the decode path is the finding.
+func FuzzProtoutil(f *testing.F) {
+	// A minimal, well-formed-ish envelope seed (proto field 1 = empty bytes).
+	f.Add([]byte{0x0a, 0x00})
+	// An empty input.
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// Full block channel-ID extraction chain (the deepest byte-in path).
+		_, _ = protoutil.GetChannelIDFromBlockBytes(data)
+
+		if b, err := protoutil.UnmarshalBlock(data); err == nil && b != nil {
+			_, _ = protoutil.GetChannelIDFromBlock(b)
+		}
+
+		if env, err := protoutil.UnmarshalEnvelope(data); err == nil && env != nil {
+			_, _ = protoutil.GetChannelIDFromEnvelope(env)
+		}
+
+		// Individual decoders across the common/peer/msp message families.
+		_, _ = protoutil.UnmarshalPayload(data)
+		_, _ = protoutil.UnmarshalChannelHeader(data)
+		_, _ = protoutil.UnmarshalSignatureHeader(data)
+		_, _ = protoutil.UnmarshalHeader(data)
+		_, _ = protoutil.UnmarshalConfigEnvelope(data)
+		_, _ = protoutil.UnmarshalTransaction(data)
+		_, _ = protoutil.UnmarshalProposal(data)
+		_, _ = protoutil.UnmarshalProposalResponse(data)
+		_, _ = protoutil.UnmarshalChaincodeActionPayload(data)
+		_, _ = protoutil.UnmarshalChaincodeProposalPayload(data)
+		_, _ = protoutil.UnmarshalChaincodeDeploymentSpec(data)
+		_, _ = protoutil.UnmarshalChaincodeInvocationSpec(data)
+		_, _ = protoutil.UnmarshalSerializedIdentity(data)
+		_, _ = protoutil.UnmarshalTxReadWriteSet(data)
+		_, _ = protoutil.UnmarshalKVRWSet(data)
+		_, _ = protoutil.UnmarshalSignaturePolicy(data)
+	})
+}
