@@ -1,0 +1,12 @@
+# Per-Dockerfile ignore for `docker build -f mayhem/Dockerfile .` (netnew §4b).
+#
+# BuildKit gives this file FULL PRECEDENCE over the repo-root .dockerignore when
+# the build uses -f mayhem/Dockerfile. Fabric's root .dockerignore excludes
+# `.git/objects/pack`, `**/*_test.go` and `.github` — the first of which would
+# strip the git history the grader/PATCH tier require from the COPYed /mayhem tree.
+#
+# This file deliberately excludes (almost) nothing so the commit image keeps the
+# full .git history and every source file build.sh needs. Only local build scratch
+# is dropped.
+mayhem-build/
+_mayhem_harness/

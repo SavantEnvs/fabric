@@ -1,0 +1,66 @@
+// mayhem/kat/main.go.src — dynamically-linked known-answer probe for Hyperledger
+// Fabric's protobuf block/transaction decoders. `import "C"` (cgo) forces a
+// DYNAMICALLY LINKED binary so the gate's LD_PRELOAD sabotage shim can neuter it;
+// a statically-linked Go binary would be immune and give a false-green oracle —
+// exactly the trap netnew §4 warns about with `go test` alone.
+//
+// Staged by mayhem/build.sh into _mayhem_harness/kat/main.go and built with
+// CGO_ENABLED=1. It imports the REAL github.com/hyperledger/fabric/protoutil
+// package and the fabric-protos types, encodes a fixed block whose single
+// transaction carries channel id "katchan", then drives the byte-in decode path
+// (GetChannelIDFromBlockBytes / UnmarshalBlock / ComputeBlockDataHash) and prints
+// the decoded fields in a fixed, greppable format for mayhem/test.sh to assert.
+package main
+
+// #include <stdint.h>
+import "C"
+
+import (
+	"encoding/hex"
+	"fmt"
+
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric/protoutil"
+	"google.golang.org/protobuf/proto"
+)
+
+func main() {
+	// ── Build a fixed block: Block -> BlockData -> Envelope -> Payload -> Header
+	// -> ChannelHeader{ChannelId:"katchan"}. Marshal it to raw bytes, exactly as
+	// Fabric persists blocks on the wire. ──────────────────────────────────────
+	chdr := &cb.ChannelHeader{Type: int32(cb.HeaderType_CONFIG), ChannelId: "katchan"}
+	chdrBytes, _ := proto.Marshal(chdr)
+	payload := &cb.Payload{Header: &cb.Header{ChannelHeader: chdrBytes}}
+	payloadBytes, _ := proto.Marshal(payload)
+	env := &cb.Envelope{Payload: payloadBytes}
+	envBytes, _ := proto.Marshal(env)
+	block := &cb.Block{
+		Header: &cb.BlockHeader{Number: 42},
+		Data:   &cb.BlockData{Data: [][]byte{envBytes}},
+	}
+	blockBytes, _ := proto.Marshal(block)
+
+	// 1. Byte-in channel-ID extraction through the full real decode chain.
+	if cid, err := protoutil.GetChannelIDFromBlockBytes(blockBytes); err != nil {
+		fmt.Printf("KAT_CHANNELID_ERR=%v\n", err)
+	} else {
+		fmt.Printf("KAT_CHANNELID=%s\n", cid)
+	}
+
+	// 2. UnmarshalBlock round-trip: the header block number survives decode.
+	if b2, err := protoutil.UnmarshalBlock(blockBytes); err == nil && b2.GetHeader() != nil {
+		fmt.Printf("KAT_BLOCKNUM=%d\n", b2.GetHeader().GetNumber())
+	}
+
+	// 3. ComputeBlockDataHash of a single "abc" entry == SHA256("abc").
+	h := protoutil.ComputeBlockDataHash(&cb.BlockData{Data: [][]byte{[]byte("abc")}})
+	fmt.Printf("KAT_DATAHASH=%s\n", hex.EncodeToString(h))
+
+	// 4. An empty (data-less) block must be rejected by the extraction path.
+	emptyBlockBytes, _ := proto.Marshal(&cb.Block{})
+	if _, e := protoutil.GetChannelIDFromBlockBytes(emptyBlockBytes); e != nil {
+		fmt.Println("KAT_EMPTYERR=true")
+	} else {
+		fmt.Println("KAT_EMPTYERR=false")
+	}
+}
